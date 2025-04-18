@@ -4,6 +4,22 @@ import { DURATIONS, WAITING_LIST_STATUS, TICKET_STATUS } from "./constants";
 import { components, internal } from "./_generated/api";
 import { processQueue } from "./waitingList";
 import { MINUTE, RateLimiter } from "@convex-dev/rate-limiter";
+import Stripe from "stripe";
+
+
+export const getUserUpcomingEvents = query({
+  args: { userId: v.string() },
+  handler: async (ctx, { userId }) => {
+    const now = Date.now();
+
+    const allEvents = await ctx.db
+      .query("events")
+      .withIndex("by_user", (q) => q.eq("userId", userId))
+      .collect();
+
+    return allEvents.filter((event) => event.eventDate >= now);
+  },
+});
 
 export type Metrics = {
   soldTickets: number;
@@ -186,7 +202,27 @@ export const joinWaitingList = mutation({
   },
 });
 
-// Purchase ticket
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY as string, {
+  apiVersion: "2024-10-28.acacia",
+});
+
+// const paymentIntent = await stripe.paymentIntents.retrieve(
+//   paymentInfo.paymentIntentId
+// );
+// if (paymentIntent.status !== "succeeded") {
+//   throw new Error("Payment not successful");
+// }
+
+export async function withTimeout<T>(
+  promise: Promise<T>,
+  ms: number
+): Promise<T> {
+  const timeout = new Promise<never>((_, reject) =>
+    setTimeout(() => reject(new Error("TimeoutError")), ms)
+  );
+  return Promise.race([promise, timeout]);
+}
+
 export const purchaseTicket = mutation({
   args: {
     eventId: v.id("events"),
@@ -198,77 +234,75 @@ export const purchaseTicket = mutation({
     }),
   },
   handler: async (ctx, { eventId, userId, waitingListId, paymentInfo }) => {
-    console.log("Starting purchaseTicket handler", {
-      eventId,
-      userId,
-      waitingListId,
-    });
+    console.log("🟡 purchaseTicket start", { eventId, userId, waitingListId });
 
-    // Verify waiting list entry exists and is valid
     const waitingListEntry = await ctx.db.get(waitingListId);
-    console.log("Waiting list entry:", waitingListEntry);
+    if (!waitingListEntry) throw new Error("Waiting list entry not found");
+    if (waitingListEntry.status !== "offered")
+      throw new Error("Ticket offer expired or not valid");
+    if (waitingListEntry.userId !== userId)
+      throw new Error("User mismatch for waiting list");
 
-    if (!waitingListEntry) {
-      console.error("Waiting list entry not found");
-      throw new Error("Waiting list entry not found");
-    }
-
-    if (waitingListEntry.status !== WAITING_LIST_STATUS.OFFERED) {
-      console.error("Invalid waiting list status", {
-        status: waitingListEntry.status,
-      });
-      throw new Error(
-        "Invalid waiting list status - ticket offer may have expired"
-      );
-    }
-
-    if (waitingListEntry.userId !== userId) {
-      console.error("User ID mismatch", {
-        waitingListUserId: waitingListEntry.userId,
-        requestUserId: userId,
-      });
-      throw new Error("Waiting list entry does not belong to this user");
-    }
-
-    // Verify event exists and is active
     const event = await ctx.db.get(eventId);
-    console.log("Event details:", event);
-
-    if (!event) {
-      console.error("Event not found", { eventId });
-      throw new Error("Event not found");
-    }
-
-    if (event.is_cancelled) {
-      console.error("Attempted purchase of cancelled event", { eventId });
-      throw new Error("Event is no longer active");
-    }
+    if (!event) throw new Error("Event not found");
+    if (event.is_cancelled) throw new Error("Event is cancelled");
 
     try {
-      console.log("Creating ticket with payment info", paymentInfo);
-      // Create ticket with payment info
-      await ctx.db.insert("tickets", {
+      console.log("🟡 Fetching payment intent from Stripe");
+      const paymentIntent = await withTimeout(
+        stripe.paymentIntents.retrieve(paymentInfo.paymentIntentId),
+        20_000 // ⬅️ Increased timeout to 20s
+      );
+
+      console.log("🟢 PaymentIntent retrieved:", {
+        id: paymentIntent.id,
+        status: paymentIntent.status,
+        amount_received: paymentIntent.amount_received,
+      });
+
+      if (paymentIntent.status !== "succeeded") {
+        throw new Error("Payment not successful: " + paymentIntent.status);
+      }
+
+      console.log("🟢 Creating ticket in DB...");
+      const ticketId = await ctx.db.insert("tickets", {
         eventId,
         userId,
         purchasedAt: Date.now(),
-        status: TICKET_STATUS.VALID,
+        status: "valid",
         paymentIntentId: paymentInfo.paymentIntentId,
         amount: paymentInfo.amount,
       });
 
-      console.log("Updating waiting list status to purchased");
+      console.log("✅ Ticket created:", ticketId);
+
       await ctx.db.patch(waitingListId, {
-        status: WAITING_LIST_STATUS.PURCHASED,
+        status: "purchased",
       });
 
-      console.log("Processing queue for next person");
-      // Process queue for next person
+      console.log("🟢 Waiting list status updated");
       await processQueue(ctx, { eventId });
 
-      console.log("Purchase ticket completed successfully");
-    } catch (error) {
-      console.error("Failed to complete ticket purchase:", error);
-      throw new Error(`Failed to complete ticket purchase: ${error}`);
+      console.log("✅ Ticket purchase completed successfully");
+    } catch (error: unknown) {
+      if (error instanceof Error) {
+        console.error("❌ Ticket purchase failed:", error.message);
+
+        // If the error is a known Stripe error with a code property
+        if (
+          (error as { code?: string }).code === "23" ||
+          error.name === "TimeoutError"
+        ) {
+          throw new Error("Timeout while verifying payment. Please retry.");
+        }
+
+        throw new Error(`Ticket purchase failed: ${error.message}`);
+      } else {
+        console.error("❌ Unknown error:", error);
+        throw new Error(
+          "An unknown error occurred during the ticket purchase."
+        );
+      }
     }
   },
 });
@@ -500,3 +534,4 @@ export const cancelEvent = mutation({
     return { success: true };
   },
 });
+

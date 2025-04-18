@@ -12,7 +12,7 @@ export default defineSchema({
     userId: v.string(),
     imageStorageId: v.optional(v.id("_storage")),
     is_cancelled: v.optional(v.boolean()),
-  }),
+  }).index("by_user", ["userId"]), // ✅ Add this
   tickets: defineTable({
     eventId: v.id("events"),
     userId: v.string(),

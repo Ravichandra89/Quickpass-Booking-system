@@ -45,6 +45,8 @@ export async function createStripeCheckoutSession({
     }
   );
 
+  console.log("Stripe Connect Id", stripeConnectId);
+
   if (!stripeConnectId) {
     throw new Error("Stripe Connect ID not found for owner of the event!");
   }
