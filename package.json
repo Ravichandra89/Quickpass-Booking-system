@@ -13,6 +13,7 @@
     "@clerk/nextjs": "^6.3.2",
     "@convex-dev/rate-limiter": "^0.2.4",
     "@hookform/resolvers": "^3.9.1",
+    "@langchain/openai": "^0.5.6",
     "@radix-ui/react-label": "^2.1.0",
     "@radix-ui/react-slot": "^1.1.0",
     "@radix-ui/react-toast": "^1.2.2",
@@ -22,6 +23,7 @@
     "clsx": "^2.1.1",
     "convex": "^1.17.0",
     "framer-motion": "^12.7.4",
+    "langchain": "^0.3.23",
     "lucide-react": "^0.460.0",
     "next": "15.0.3",
     "openai": "^4.95.0",
@@ -34,7 +36,7 @@
     "stripe": "^17.3.1",
     "tailwind-merge": "^2.5.4",
     "tailwindcss-animate": "^1.0.7",
-    "zod": "^3.23.8"
+    "zod": "^3.24.3"
   },
   "devDependencies": {
     "@playwright/test": "^1.51.1",
