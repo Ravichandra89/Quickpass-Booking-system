@@ -6,7 +6,6 @@ import { processQueue } from "./waitingList";
 import { MINUTE, RateLimiter } from "@convex-dev/rate-limiter";
 import Stripe from "stripe";
 
-
 export const getUserUpcomingEvents = query({
   args: { userId: v.string() },
   handler: async (ctx, { userId }) => {
@@ -535,3 +534,61 @@ export const cancelEvent = mutation({
   },
 });
 
+// AI Assistant Supportive Functions
+
+export const getAllEvents = query({
+  handler: async (ctx) => {
+    try {
+      const events = await ctx.db
+        .query("events")
+        .filter((q) => q.eq(q.field("is_cancelled"), undefined))
+        .collect();
+      return events;
+    } catch (error) {
+      console.error("Error in getAllEvents:", error);
+      return [];
+    }
+  },
+});
+
+// Get User's upcoming events + AI Assitant
+export const getUpcomingEventsForUsers = query({
+  args: { userId: v.string() },
+  handler: async (ctx, args) => {
+    try {
+      const tickets = await ctx.db
+        .query("tickets")
+        .withIndex("by_user", (q) => q.eq("userId", args.userId))
+        .filter((q) => q.eq(q.field("status"), "valid"))
+        .collect();
+
+      const events = await Promise.all(
+        tickets.map(async (ticket) => {
+          try {
+            const event = await ctx.db.get(ticket.eventId);
+            if (event && !event.is_cancelled && event.eventDate >= Date.now()) {
+              return {
+                ...event,
+                purchasedAt: ticket.purchasedAt,
+                ticketStatus: ticket.status,
+              };
+            }
+            return null;
+          } catch (eventError) {
+            console.error(
+              "Error fetching event for ticket:",
+              ticket.eventId,
+              eventError
+            );
+            return null;
+          }
+        })
+      );
+
+      return events.filter((event) => event !== null);
+    } catch (error) {
+      console.error("Error in getUpcomingEventsForUsers:", error);
+      return [];
+    }
+  },
+});

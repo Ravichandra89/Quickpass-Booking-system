@@ -54,4 +54,12 @@ export default defineSchema({
   })
     .index("by_user_id", ["userId"])
     .index("by_email", ["email"]),
+
+  // Adding the Conversations table
+  conversations: defineTable({
+    userId: v.string(),
+    message: v.string(),
+    sender: v.union(v.literal("user"), v.literal("assistant")),
+    timestamp: v.string(),
+  }).index("by_user", ["userId"]),
 });
